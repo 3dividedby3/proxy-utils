@@ -8,7 +8,7 @@ public class ProxyUtils {
 
     private static final int DEFAULT_READ_BYTES_LENGTH = 5_000;
     
-    public ReadInputStreamData readFromStream(final InputStream inputStream) {
+    public ReadInputStreamData readFromStream(final InputStream inputStream, boolean isHttp) {
         ReadInputStreamData response = new ReadInputStreamData();
         response.setEndOfStream(false);
         int readInt = 0;
@@ -24,7 +24,7 @@ public class ProxyUtils {
                     break;
                 }
                 allBytes.add((byte) readInt);
-                if (inputStream.available() == 0) {
+                if (!isHttp && inputStream.available() == 0) {
                     logWithThreadName("inputstream - no more data available");
                     break;
                 }

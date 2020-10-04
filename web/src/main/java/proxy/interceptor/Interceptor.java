@@ -19,7 +19,7 @@ public class Interceptor {
         ,GET;
     }
     
-    public static final String REQ_PROP_CONNID = "connId";
+    public static final String REQ_PROP_CONNID = "ConnId";
     public static final String REQ_PROP_END_OF_STREAM = "EndOfStream";
     public static final String REQ_PROP_DESTINATION_HOST = "MediatorHost";
     public static final String REQ_PROP_DESTINATION_PORT = "MediatorPort";
@@ -29,19 +29,20 @@ public class Interceptor {
     private static final int MEDIATOR_READ_TIMEOUT = 30_000;
     private static final int POLL_TIMEOUT = 30_000;
 
-    private int interceptorServerPort = 443;
-    private String mediatorUrl = "http://localhost:7788/proxy";
-
     private int connId = 0;
-    private ProxyUtils proxyUtils = new ProxyUtils();
+    private ProxyUtils proxyUtils;
+
+    private final int interceptorServerPort;
+    private final String mediatorUrl;
+    private final String destinationHost;
+    private final int destinationPort;
     
-//  private String destinationHost = "216.58.214.238"; //www.youtube.com
-//  private String destinationHost = "93.184.216.34"; //www.example.org
-    private final String destinationHost = "172.217.20.4"; //www.google.com
-    private final int destinationPort = 443;
-    
-    public static void main(String[] args) throws Exception {
-        new Interceptor().start();
+    public Interceptor(int interceptorServerPort, String mediatorUrl, int destinationPort, String destinationHost) {
+        proxyUtils = new ProxyUtils();
+        this.interceptorServerPort = interceptorServerPort;
+        this.mediatorUrl = mediatorUrl;
+        this.destinationPort = destinationPort;
+        this.destinationHost = destinationHost;
     }
 
     public void start() throws IOException {
@@ -49,6 +50,7 @@ public class Interceptor {
         
         proxyUtils.logWithThreadName("Interceptor listening on port: " + interceptorServerPort);
         proxyUtils.logWithThreadName("Mediator URL: " + mediatorUrl);
+        proxyUtils.logWithThreadName("Destination host: " + destinationHost + ", port: " + destinationPort);
         
         while (true) {
             proxyUtils.logWithThreadName("Waiting for new connection...");
@@ -61,13 +63,11 @@ public class Interceptor {
                         fireNewIntercepted(interceptedSocket, connId);
                     } catch (Exception e) {
                         try {
+                            proxyUtils.logWithThreadName("Exception on new connection setup: " + e);
                             interceptedSocket.close();
                         } catch (IOException e1) {
-                            // TODO Auto-generated catch block
-                            e1.printStackTrace();
+                            proxyUtils.logWithThreadName("Cannot close intercepted socket: " + e1);
                         }
-                        // TODO Auto-generated catch block
-                        e.printStackTrace();
                     }
                 }
             }.start();
@@ -87,7 +87,7 @@ public class Interceptor {
             public void run() {
                 try {
                     while (true) {
-                        ReadInputStreamData currentReadData = proxyUtils.readFromStream(interceptedSocket.getInputStream());
+                        ReadInputStreamData currentReadData = proxyUtils.readFromStream(interceptedSocket.getInputStream(), false);
                         if (currentReadData.getData().length > 0) {
     //                            proxyUtils.logWithThreadName("data from intercepted: " + new String(currentReadData.data, "UTF-8"));
                             interceptedGroup.getData().add(currentReadData.getData());
@@ -99,7 +99,7 @@ public class Interceptor {
                         }
                     }
                 } catch (IOException e) {
-                    proxyUtils.logWithThreadName("IOException: " + e);
+                    proxyUtils.logWithThreadName("stopping because of exception: " + e);
                     e.printStackTrace();
                     try {
                         closeInterceptedConnection(interceptedSocket, interceptedGroup);
@@ -114,6 +114,7 @@ public class Interceptor {
 
         proxyUtils.logWithThreadName("[" + connId + "] setting up thread to write to mediator");
         new Thread("write_to_mediator_" + connId) {
+            //this thread does not send endOfStream, only the read_mediator... thread does
             public void run() {
                 try {
                     while (true) {
@@ -143,10 +144,15 @@ public class Interceptor {
                             return;
                         }
                     }
-                } catch (Exception e) {
+                } catch (IOException | InterruptedException e) {
                     proxyUtils.logWithThreadName("stopping because of exception: " + e);
                     e.printStackTrace();
-                    interceptedGroup.setEndOfStream(true);
+                    try {
+                        closeInterceptedConnection(interceptedSocket, interceptedGroup);
+                    } catch (IOException e2) {
+                        proxyUtils.logWithThreadName("IOException while closing connection: " + e2);
+                        e2.printStackTrace();
+                    }
                 }
             }
         }.start();
@@ -164,7 +170,7 @@ public class Interceptor {
                             mediatorConnection.addRequestProperty(REQ_PROP_END_OF_STREAM, Boolean.TRUE.toString());
                         }
                         proxyUtils.logWithThreadName("reading data from mediator");
-                        ReadInputStreamData currentReadData = proxyUtils.readFromStream(mediatorConnection.getInputStream());
+                        ReadInputStreamData currentReadData = proxyUtils.readFromStream(mediatorConnection.getInputStream(), true);
                         if (currentReadData.getData().length > 0) {
                             proxyUtils.logWithThreadName("writing data to intercepted");
                             interceptedSocket.getOutputStream().write(currentReadData.getData());
@@ -172,16 +178,25 @@ public class Interceptor {
                             proxyUtils.logWithThreadName("no data from mediator");
                         }
 
+                        if (interceptedGroup.isEndOfStream()) {
+                            proxyUtils.logWithThreadName("received endOfStream, stopping thread");
+                            return;
+                        }
                         if (mediatorConnection.getHeaderField(REQ_PROP_END_OF_STREAM) != null) {
                             proxyUtils.logWithThreadName("received endOfStream from mediator, stopping thread");
                             interceptedGroup.setEndOfStream(true);
                             return;
                         }
                     }
-                } catch (Exception e) {
+                } catch (IOException e) {
                     proxyUtils.logWithThreadName("stopping because of exception: " + e);
                     e.printStackTrace();
-                    interceptedGroup.setEndOfStream(true);
+                    try {
+                        closeInterceptedConnection(interceptedSocket, interceptedGroup);
+                    } catch (IOException e2) {
+                        proxyUtils.logWithThreadName("IOException while closing connection: " + e2);
+                        e2.printStackTrace();
+                    }
                 }
             }
         }.start();
@@ -190,7 +205,6 @@ public class Interceptor {
     
     private HttpURLConnection createConnection(HttpMethod httpMethod) throws MalformedURLException, IOException, ProtocolException {
         URL url = new URL(mediatorUrl);
-        //use javax.net.ssl.HttpsURLConnection for Https connection
         HttpURLConnection mediatorConnection = (HttpURLConnection)url.openConnection();
         mediatorConnection.setConnectTimeout(MEDIATOR_CONNECT_TIMEOUT);
         mediatorConnection.setReadTimeout(MEDIATOR_READ_TIMEOUT);

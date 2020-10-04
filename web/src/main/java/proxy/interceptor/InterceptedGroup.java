@@ -5,8 +5,14 @@ import java.util.concurrent.BlockingQueue;
 
 public class InterceptedGroup {
     
-    private BlockingQueue<byte[]> data = new ArrayBlockingQueue<>(128);
+    private final BlockingQueue<byte[]> data;
+    private final long created;
     private volatile boolean endOfStream;
+    
+    public InterceptedGroup() {
+        data = new ArrayBlockingQueue<>(128);
+        created = System.currentTimeMillis();
+    }
     
     /**
      * @return the data
@@ -14,12 +20,7 @@ public class InterceptedGroup {
     public BlockingQueue<byte[]> getData() {
         return data;
     }
-    /**
-     * @param data the data to set
-     */
-    public void setData(BlockingQueue<byte[]> data) {
-        this.data = data;
-    }
+
     /**
      * @return the endOfStream
      */
@@ -31,5 +32,9 @@ public class InterceptedGroup {
      */
     public void setEndOfStream(boolean endOfStream) {
         this.endOfStream = endOfStream;
+    }
+
+    public long getCreated() {
+        return created;
     }
 }
